@@ -50,7 +50,8 @@ static int sPendingState;   // 0, or +slot (save) / -slot (load), from hotkeys
 static char sToast[96];
 static uint64_t sToastUntilNs;
 
-static SDL_Texture* sMask; // LCD/CRT effect, multiplied over the game
+static SDL_Texture* sMask;         // LCD/CRT pattern, multiplied over the game
+static SDL_Texture* sEffectTarget; // the game, scaled up for the pattern
 static int sMaskW, sMaskH, sMaskFilter;
 
 static SDL_Texture* sThumbs[PORT_STATE_SLOTS + 1];
@@ -254,37 +255,58 @@ static void ApplyVideoConfig(void)
         SDL_SetAudioStreamGain(sAudio, sConfig.volume / 100.0f);
 }
 
-// The LCD/CRT effect is a texture the size of the game on screen, multiplied
-// over it: an exact pattern for each output pixel, rebuilt when the size
-// changes.
-static void UpdateMask(int w, int h)
+// The LCD/CRT effect. The game is drawn k times its size into sEffectTarget
+// (k = output pixels per GBA pixel, rounded down), a k x k pattern per GBA pixel
+// is multiplied over it, and the result is scaled up to the game rect with
+// linear filtering. Every GBA pixel gets exactly the same pattern, so the grid
+// stays even at any scale: drawing the pattern straight at the output size
+// gave gaps of one or two pixels at 6.75x (1080p), which beat into bigger
+// blocks over the picture.
+static int EffectScale(const SDL_FRect* dst)
 {
+    const int k = (int)SDL_floorf(dst->h / GBA_SCREEN_HEIGHT + 0.01f);
+    return SDL_clamp(k, 1, 12);
+}
+
+// Brightness of row/column i of a k-pixel cell.
+static float LcdProfile(int i, int k)
+{
+    if (i == k - 1)
+        return 0.70f; // the gap between two LCD cells
+    if (k >= 6 && (i == 0 || i == k - 2))
+        return 0.92f; // soft edges on big cells
+    return 1.0f;
+}
+
+static void UpdateMask(int k)
+{
+    const int w = GBA_SCREEN_WIDTH * k, h = GBA_SCREEN_HEIGHT * k;
     if (sMask && sMaskW == w && sMaskH == h && sMaskFilter == sConfig.filter)
         return;
     if (sMask)
         SDL_DestroyTexture(sMask);
-    sMask = NULL;
-    if (w <= 0 || h <= 0 || w > 8192 || h > 8192)
-        return;
-    uint32_t* px = malloc((size_t)w * h * 4);
-    if (!px)
+    if (sEffectTarget)
+        SDL_DestroyTexture(sEffectTarget);
+    if (sEffectTarget)
+        SDL_DestroyTexture(sEffectTarget);
+    sMask = sEffectTarget = NULL;
+    sMaskW = w;
+    sMaskH = h;
+    sMaskFilter = sConfig.filter;
+    // Too small for a pattern: one pixel of gap or scanline would be half
+    // of each GBA pixel.
+    if (k < (sConfig.filter == PORT_FILTER_LCD ? 3 : 2))
         return;
 
-    const float sx = (float)GBA_SCREEN_WIDTH / w, sy = (float)GBA_SCREEN_HEIGHT / h;
-    const float cell = (float)w / GBA_SCREEN_WIDTH; // output pixels per GBA pixel
-    for (int y = 0; y < h; y++) {
-        const float fy = (y + 0.5f) * sy - SDL_floorf((y + 0.5f) * sy);
-        for (int x = 0; x < w; x++) {
-            const float fx = (x + 0.5f) * sx - SDL_floorf((x + 0.5f) * sx);
+    uint32_t tile[12 * 12];
+    for (int y = 0; y < k; y++) {
+        for (int x = 0; x < k; x++) {
             float r = 1.0f, g = 1.0f, b = 1.0f;
             if (sConfig.filter == PORT_FILTER_LCD) {
-                // Thin dark gap between pixels (one output pixel when they are small).
-                const float gap = cell >= 4.0f ? 0.2f : 1.0f / SDL_max(cell, 1.0f);
-                if (cell >= 2.0f && (fx >= 1.0f - gap || fy >= 1.0f - gap))
-                    r = g = b = 0.72f;
+                r = g = b = LcdProfile(x, k) * LcdProfile(y, k);
             } else if (sConfig.filter == PORT_FILTER_CRT) {
                 // Scanlines plus a faint aperture grille.
-                const float line = 0.68f + 0.32f * SDL_sinf(SDL_PI_F * fy);
+                const float line = 0.68f + 0.32f * SDL_sinf(SDL_PI_F * (y + 0.5f) / k);
                 r = g = b = line;
                 switch (x % 3) {
                 case 0: g *= 0.9f; b *= 0.9f; break;
@@ -292,20 +314,57 @@ static void UpdateMask(int w, int h)
                 default: r *= 0.9f; g *= 0.9f; break;
                 }
             }
-            px[(size_t)y * w + x] = 0xFF000000u | (uint32_t)(b * 255.0f) << 16 | (uint32_t)(g * 255.0f) << 8 |
-                                    (uint32_t)(r * 255.0f);
+            tile[y * k + x] = 0xFF000000u | (uint32_t)(b * 255.0f) << 16 | (uint32_t)(g * 255.0f) << 8 |
+                              (uint32_t)(r * 255.0f);
         }
     }
+    uint32_t* px = malloc((size_t)w * h * 4);
+    if (!px)
+        return;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            px[(size_t)y * w + x] = tile[(y % k) * k + x % k];
     sMask = SDL_CreateTexture(sRenderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
-    if (sMask) {
+    sEffectTarget = SDL_CreateTexture(sRenderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, w, h);
+    if (sMask && sEffectTarget) {
         SDL_UpdateTexture(sMask, NULL, px, w * 4);
         SDL_SetTextureBlendMode(sMask, SDL_BLENDMODE_MOD);
         SDL_SetTextureScaleMode(sMask, SDL_SCALEMODE_NEAREST);
+        SDL_SetTextureBlendMode(sEffectTarget, SDL_BLENDMODE_NONE);
+    } else {
+        if (sMask)
+            SDL_DestroyTexture(sMask);
+        if (sEffectTarget)
+            SDL_DestroyTexture(sEffectTarget);
+        sMask = sEffectTarget = NULL;
     }
     free(px);
-    sMaskW = w;
-    sMaskH = h;
-    sMaskFilter = sConfig.filter;
+}
+
+// Where the game picture is drawn: straight into `dst`, or into the effect
+// target (returns it) when an effect is on.
+static SDL_Texture* BeginEffect(const SDL_FRect* dst, SDL_FRect* gameDst)
+{
+    *gameDst = *dst;
+    if (sConfig.filter == PORT_FILTER_NONE)
+        return NULL;
+    const int k = EffectScale(dst);
+    UpdateMask(k);
+    if (!sEffectTarget || !SDL_SetRenderTarget(sRenderer, sEffectTarget))
+        return NULL;
+    *gameDst = (SDL_FRect){ 0, 0, (float)sMaskW, (float)sMaskH };
+    return sEffectTarget;
+}
+
+static void EndEffect(SDL_Texture* target, const SDL_FRect* dst)
+{
+    if (!target)
+        return;
+    SDL_RenderTexture(sRenderer, sMask, NULL, NULL);
+    SDL_SetRenderTarget(sRenderer, NULL);
+    const bool exact = (int)dst->w == sMaskW && (int)dst->h == sMaskH;
+    SDL_SetTextureScaleMode(target, exact ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR);
+    SDL_RenderTexture(sRenderer, target, NULL, dst);
 }
 
 static void DrawToast(void)
@@ -332,12 +391,10 @@ static void DrawScene(bool touchPad)
 
     SDL_SetRenderDrawColor(sRenderer, 0, 0, 0, 255);
     SDL_RenderClear(sRenderer);
-    SDL_RenderTexture(sRenderer, sTexture, NULL, &dst);
-    if (sConfig.filter != PORT_FILTER_NONE) {
-        UpdateMask((int)dst.w, (int)dst.h);
-        if (sMask)
-            SDL_RenderTexture(sRenderer, sMask, NULL, &dst);
-    }
+    SDL_FRect game;
+    SDL_Texture* effect = BeginEffect(&dst, &game);
+    SDL_RenderTexture(sRenderer, sTexture, NULL, &game);
+    EndEffect(effect, &dst);
     if (touchPad && sTouchVisible)
         DrawTouchPad(TouchKeys(), -2);
     DrawToast();
@@ -611,6 +668,8 @@ void Port_HostShutdown(void)
     }
     if (sMask)
         SDL_DestroyTexture(sMask);
+    if (sEffectTarget)
+        SDL_DestroyTexture(sEffectTarget);
     if (sAudio)
         SDL_DestroyAudioStream(sAudio);
     if (sGamepad)
