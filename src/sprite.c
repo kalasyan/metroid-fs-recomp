@@ -214,6 +214,14 @@ void SpriteUpdateAnimation(void)
     }
 }
 
+#ifdef PLATFORM_PC
+// mf-android widescreen: also draw the sprites in the extra columns of a
+// wide frame (port/game/widescreen.c). Same as the status otherwise.
+#define SPRITE_DRAW_STATUS(pSprite) Port_WideSpriteStatus(pSprite)
+#else
+#define SPRITE_DRAW_STATUS(pSprite) ((pSprite)->status)
+#endif
+
 /**
  * @brief eb04 | 9c | To document
  * 
@@ -233,7 +241,7 @@ void unk_eb04(void)
 
     for (i = 0; i < MAX_AMOUNT_OF_SPRITES; i++)
     {
-        if ((gSpriteData[i].status & checkStatus) != drawStatus)
+        if ((SPRITE_DRAW_STATUS(&gSpriteData[i]) & checkStatus) != drawStatus)
         {
             gSpriteDrawOrder[i] = 0;
             continue;
@@ -277,7 +285,7 @@ void SpriteDrawAll(void)
 
     for (i = 0; i < MAX_AMOUNT_OF_SPRITES; i++)
     {
-        if ((gSpriteData[i].status & checkStatus) != drawStatus)
+        if ((SPRITE_DRAW_STATUS(&gSpriteData[i]) & checkStatus) != drawStatus)
         {
             gSpriteDrawOrder[i] = 0;
             continue;
@@ -318,7 +326,7 @@ void unk_ec38(void)
 
     for (i = 0; i < MAX_AMOUNT_OF_SPRITES; i++)
     {
-        if ((gSpriteData[i].status & checkStatus) != drawStatus)
+        if ((SPRITE_DRAW_STATUS(&gSpriteData[i]) & checkStatus) != drawStatus)
         {
             gSpriteDrawOrder[i] = 0;
             continue;
@@ -402,6 +410,15 @@ void SpriteDraw(s32 slot)
 
     if (partCount + prevSlot >= OAM_BUFFER_DATA_SIZE)
         return;
+
+#ifdef PLATFORM_PC
+    // Widescreen: a sprite only visible in the extra columns leaves room in
+    // the OAM for what is drawn after it (Samus, projectiles).
+    if (!(gCurrentSprite.status & SPRITE_STATUS_ONSCREEN) && partCount + prevSlot >= OAM_BUFFER_DATA_SIZE - 32)
+        return;
+    if (gCurrentSprite.properties & SP_ABSOLUTE_POSITION)
+        Port_WideMarkCenter(prevSlot, prevSlot + partCount);
+#endif // PLATFORM_PC
 
     dst = (u16*)(gOamData + prevSlot);
     yPosition = SUB_PIXEL_TO_PIXEL_(gCurrentSprite.yPosition) - SUB_PIXEL_TO_PIXEL(gBg1YPosition);

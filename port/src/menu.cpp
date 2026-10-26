@@ -18,6 +18,7 @@ enum Page {
     PAGE_VIDEO,
     PAGE_SOUND_SPEED,
     PAGE_TOUCH,
+    PAGE_EXTRAS,
     PAGE_COUNT
 };
 
@@ -27,6 +28,7 @@ const char* const kPageNames[PAGE_COUNT] = {
     "Vídeo",
     "Sonido y velocidad",
     "Mando táctil",
+    "Mapa y vibración",
 };
 
 const char* const kInputLabels[PORT_INPUT_COUNT] = {
@@ -318,8 +320,29 @@ void PageVideo()
     changed |= ImGui::Checkbox("Escalado entero (píxeles idénticos)", &cfg.integerScaling);
     changed |= ImGui::Checkbox("Filtro suave (bilineal)", &cfg.smoothScaling);
     changed |= ImGui::Combo("Efecto", &cfg.filter, kFilters, PORT_FILTER_COUNT);
+    static const char* const kWide[PORT_WIDE_COUNT] = { "No (como la GBA)", "Automática",
+                                                         "16:10", "16:9", "2:1" };
+    changed |= ImGui::Combo("Pantalla panorámica", &cfg.widescreen, kWide, PORT_WIDE_COUNT);
+    Hint("Muestra más escenario a los lados en lugar de bandas negras (Automática: tan ancha como la "
+         "pantalla). El juego no cambia: solo se ve más. "
+         "Los menús, el mapa y las cinemáticas siguen en 3:2 en el centro, y en las salas más estrechas "
+         "que la pantalla quedan bandas negras.");
     changed |= ImGui::Checkbox("Sincronización vertical (VSync)", &cfg.vsync);
     Hint("Con VSync la imagen no se corta, pero puede añadir algo de retraso.");
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Fluidez");
+    changed |= ImGui::Checkbox("Ajustar la velocidad a la pantalla", &cfg.syncToDisplay);
+    Hint("En pantallas de 60, 120 o 240 Hz el juego va un 0,46 % más rápido para coincidir con la "
+         "pantalla: sin tirones. El sonido se ajusta solo. Activa VSync.");
+    changed |= ImGui::Checkbox("Mezclar fotogramas (90, 144 Hz...)", &cfg.frameBlend);
+    Hint("Si la pantalla no va a 60 Hz ni a un múltiplo, cada refresco mezcla los dos últimos fotogramas "
+         "para suavizar el movimiento (deja una ligera estela). Activa VSync.");
+    if (sHost.syncStatus) {
+        char status[160];
+        sHost.syncStatus(status, sizeof(status));
+        Hint(status);
+    }
     if (changed)
         sHost.applyConfig();
 }
@@ -346,6 +369,35 @@ void PageSoundSpeed()
     char hint[256];
     snprintf(hint, sizeof(hint), "Tecla: %s · Mando: %s (se cambian en Controles).", key, pad);
     Hint(hint);
+}
+
+// Rumble and the second screen (AYN Thor's lower display, a window on PC).
+void PageExtras()
+{
+    PortConfig& cfg = Config();
+    static const char* const kScreen2[PORT_SCREEN2_COUNT] = { "Desactivada", "Mapa de la zona", "Estado de Samus" };
+    bool changed = false;
+
+    ImGui::SeparatorText("Vibración");
+    changed |= ImGui::Checkbox("Vibración del mando", &cfg.rumbleGamepad);
+#ifdef __ANDROID__
+    changed |= ImGui::Checkbox("Vibración del dispositivo", &cfg.rumbleDevice);
+#endif
+    changed |= ImGui::SliderInt("Intensidad", &cfg.rumbleStrength, 0, 100, "%d %%");
+    Hint("Al recibir daño, con las bombas y las bombas de poder, los temblores de los jefes, "
+         "las caídas desde muy alto y al recoger objetos.");
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Segunda pantalla");
+    changed |= ImGui::Combo("Mostrar", &cfg.secondScreen, kScreen2, PORT_SCREEN2_COUNT);
+#ifdef __ANDROID__
+    Hint("En dispositivos con dos pantallas (AYN Thor), la de abajo muestra el mapa con la posición "
+         "de Samus o su energía, munición y equipo. Con una sola pantalla no hace nada.");
+#else
+    Hint("Abre una segunda ventana (en el segundo monitor si lo hay) con el mapa de la zona o el estado de Samus.");
+#endif
+    if (changed)
+        sHost.applyConfig();
 }
 
 void PageTouch()
@@ -534,6 +586,7 @@ void MainWindow()
     case PAGE_VIDEO: PageVideo(); break;
     case PAGE_SOUND_SPEED: PageSoundSpeed(); break;
     case PAGE_TOUCH: PageTouch(); break;
+    case PAGE_EXTRAS: PageExtras(); break;
     default: break;
     }
     if (sStatus[0]) {

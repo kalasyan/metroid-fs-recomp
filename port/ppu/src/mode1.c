@@ -37,6 +37,10 @@ int virtuappu_mode1_ws_msg_x0 = 0;
 int virtuappu_mode1_ws_msg_x1 = 0;
 int virtuappu_mode1_ws_msg_y0 = 0;
 int virtuappu_mode1_ws_msg_y1 = 0;
+/* mf-android widescreen placement (see mode1.h). */
+int virtuappu_mode1_ws_active = 0;
+int virtuappu_mode1_ws_origin = 0;
+VirtuaPPUMode1WsObj virtuappu_mode1_ws_obj[128];
 
 typedef struct Mode1OAMAttr {
     uint16_t attr0;
@@ -446,13 +450,16 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
     int pixel_y = src_y % 8;
     int x;
     const int frame_width = mode1_frame_width;
+    /* mf-android widescreen: sample GBA column x - ws_origin (0 = native). */
+    const bool ws = virtuappu_mode1_ws_active && frame_width > MODE1_GBA_BG_CLIP_X;
+    const int ws_origin = ws ? virtuappu_mode1_ws_origin : 0;
     /* Widescreen Option A: 32-tile BGs have valid VRAM tile data only
      * within the native 240 px. Cull the line to the current visible frame
      * width, but keep the fixed framebuffer pitch separate for presentation. */
     int render_max_x = (map_width_tiles >= 64)
                            ? frame_width
                            : ((virtuappu_mode1_ws_shadow[bg_index] != NULL) ? frame_width : MODE1_GBA_BG_CLIP_X);
-    if (render_max_x > frame_width)
+    if (ws || render_max_x > frame_width)
         render_max_x = frame_width;
     const bool ws_shadow_active = (map_width_tiles < 64) && (virtuappu_mode1_ws_shadow[bg_index] != NULL);
     const int ws_shadow_base = virtuappu_mode1_ws_shadow_base_tile[bg_index];
@@ -496,7 +503,7 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
      * destination column (and drives the x>=240 shadow/sentinel guards). */
 #define MODE1_BG_PIXEL(_sx)                                                                                            \
     do {                                                                                                               \
-        int eff_x = (mosaic_h == 1) ? (_sx) : ((_sx) / mosaic_h) * mosaic_h;                                           \
+        int eff_x = (mosaic_h == 1) ? (_sx) : ((_sx) - ((((_sx) % mosaic_h) + mosaic_h) % mosaic_h));                \
         int src_x = (eff_x + scroll_x) & (map_width_tiles * 8 - 1);                                                    \
         int tile_col = src_x / 8;                                                                                      \
         int pixel_x = src_x % 8;                                                                                       \
@@ -539,7 +546,8 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
         }                                                                                                              \
         if (color_index != 0u) {                                                                                       \
             size_t pal_idx = bpp8 ? (size_t)color_index : (bg_pal_bank + color_index);                                 \
-            if (!(x >= MODE1_GBA_BG_CLIP_X && (mode1_memory.bg_palette[pal_idx] & 0x7FFFu) == 0x7C1Fu)) {              \
+            if (!(ws_shadow_active && x >= MODE1_GBA_BG_CLIP_X &&                                                    \
+                  (mode1_memory.bg_palette[pal_idx] & 0x7FFFu) == 0x7C1Fu)) {                                          \
                 line_buffer[x] = mode1_bg_abgr_lut[pal_idx];                                                           \
                 if (priority_buffer != NULL) {                                                                         \
                     priority_buffer[x] = priority;                                                                     \
@@ -553,7 +561,7 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
          * per-pixel remap dispatch (its two flags are per-line invariants) out
          * of the hot loop entirely — A53 win, zero added per-pixel branch. */
         for (x = 0; x < render_max_x; ++x) {
-            MODE1_BG_PIXEL(x);
+            MODE1_BG_PIXEL(x - ws_origin);
         }
     } else {
         for (x = 0; x < render_max_x; ++x) {
@@ -664,23 +672,37 @@ void virtuappu_mode1_render_obj_line(int line, bool obj_1d, uint32_t* line_buffe
         }
 
         obj_x = mode1_oam_x(attr);
-        viewport_width = mode1_frame_width;
-        if (viewport_width > MODE1_GBA_VIEWPORT_X) {
-            viewport_width = MODE1_GBA_VIEWPORT_X;
-        }
-        if (obj_x >= mode1_frame_width) {
-            obj_x -= 512;
-        }
-        sx_start = 0;
-        sx_end = bounds_width;
-        if (obj_x + bounds_width <= 0 || obj_x >= viewport_width) {
-            continue;
-        }
-        if (obj_x < 0) {
-            sx_start = -obj_x;
-        }
-        if (obj_x + sx_end > viewport_width) {
-            sx_end = viewport_width - obj_x;
+        if (virtuappu_mode1_ws_active && mode1_frame_width > MODE1_GBA_BG_CLIP_X) {
+            /* mf-android widescreen: per-entry placement chosen by the port. */
+            const VirtuaPPUMode1WsObj* ws = &virtuappu_mode1_ws_obj[i];
+            if (obj_x >= ws->wrap) {
+                obj_x -= 512;
+            }
+            obj_x += ws->shift;
+            if (obj_x + bounds_width <= ws->clip_l || obj_x >= ws->clip_r) {
+                continue;
+            }
+            sx_start = (obj_x < ws->clip_l) ? ws->clip_l - obj_x : 0;
+            sx_end = (obj_x + bounds_width > ws->clip_r) ? ws->clip_r - obj_x : bounds_width;
+        } else {
+            viewport_width = mode1_frame_width;
+            if (viewport_width > MODE1_GBA_VIEWPORT_X) {
+                viewport_width = MODE1_GBA_VIEWPORT_X;
+            }
+            if (obj_x >= mode1_frame_width) {
+                obj_x -= 512;
+            }
+            sx_start = 0;
+            sx_end = bounds_width;
+            if (obj_x + bounds_width <= 0 || obj_x >= viewport_width) {
+                continue;
+            }
+            if (obj_x < 0) {
+                sx_start = -obj_x;
+            }
+            if (obj_x + sx_end > viewport_width) {
+                sx_end = viewport_width - obj_x;
+            }
         }
 
         bpp8 = mode1_oam_bpp8(attr);
@@ -822,6 +844,24 @@ void virtuappu_mode1_render_obj_line(int line, bool obj_1d, uint32_t* line_buffe
     }
 }
 
+/* mf-android widescreen: maps a window's GBA columns [left, right) (wrapping
+ * when left > right, right clamped to 240 like the hardware) to display
+ * columns. Edges on the GBA screen border stretch to the frame border. */
+static void mode1_ws_window_h(int* left, int* right, int origin, int frame_width) {
+    int l = *left;
+    int r = *right > MODE1_GBA_BG_CLIP_X ? MODE1_GBA_BG_CLIP_X : *right;
+    if (l > r) { /* wrapped: [l, 240) + [0, r) */
+        *left = l + origin;
+        *right = (r == 0) ? 0 : r + origin;
+    } else if (l == r) {
+        *left = 0;
+        *right = 0;
+    } else {
+        *left = (l == 0) ? 0 : l + origin;
+        *right = (r >= MODE1_GBA_BG_CLIP_X) ? frame_width : r + origin;
+    }
+}
+
 void virtuappu_mode1_composite_line(int line, uint32_t bg_layers[MODE1_GBA_BG_COUNT][MODE1_GBA_WIDTH],
                                     uint8_t bg_priority[MODE1_GBA_BG_COUNT][MODE1_GBA_WIDTH],
                                     uint32_t obj_layer[MODE1_GBA_WIDTH], uint8_t obj_priority[MODE1_GBA_WIDTH],
@@ -884,6 +924,14 @@ void virtuappu_mode1_composite_line(int line, uint32_t bg_layers[MODE1_GBA_BG_CO
         evy = 16;
     }
 
+    if (virtuappu_mode1_ws_active && frame_width > MODE1_GBA_BG_CLIP_X) {
+        /* mf-android widescreen: GBA window columns -> display columns. An
+         * edge on the GBA screen border (0 / >= 240) stretches to the frame
+         * border, so full-width windows and effects cover the whole frame. */
+        const int origin = virtuappu_mode1_ws_origin;
+        mode1_ws_window_h(&win0_left, &win0_right, origin, frame_width);
+        mode1_ws_window_h(&win1_left, &win1_right, origin, frame_width);
+    }
     if (win0_right > frame_width) {
         win0_right = frame_width;
     }
@@ -1320,9 +1368,10 @@ static void mode1_render_affine_bg2_line(int frame_width, int32_t ref_x, int32_t
     const int16_t pa = (int16_t)virtuappu_mode1_io_read16(0x20u);
     const int16_t pc = (int16_t)virtuappu_mode1_io_read16(0x24u);
 
+    const int origin = (virtuappu_mode1_ws_active && frame_width > MODE1_GBA_BG_CLIP_X) ? virtuappu_mode1_ws_origin : 0;
     for (int x = 0; x < frame_width; ++x) {
-        int32_t src_x = (ref_x + pa * x) >> 8;
-        int32_t src_y = (ref_y + pc * x) >> 8;
+        int32_t src_x = (ref_x + pa * (x - origin)) >> 8;
+        int32_t src_y = (ref_y + pc * (x - origin)) >> 8;
 
         if (wrap) {
             /* map_size is a power of two (128..1024) — mask instead of the

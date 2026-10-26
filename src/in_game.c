@@ -121,6 +121,11 @@ u32 InGameHandler(void)
             break;
     }
 
+#ifdef PLATFORM_PC
+    s32 portHudEnd = 0;
+    s32 portDrewOam = FALSE;
+#endif // PLATFORM_PC
+
     if (gSubGameMode1 == SUB_GAME_MODE_SA_X_ELEVATOR || gSubGameMode1 == SUB_GAME_MODE_DYING || gSaXElevatorData.unk_0 != 0)
     {
         ResetFreeOam();
@@ -143,6 +148,10 @@ u32 InGameHandler(void)
 
         ProjectileUpdate();
         HudDraw();
+#ifdef PLATFORM_PC
+        portHudEnd = gNextOamSlot; // the HUD always starts at slot 0
+        portDrewOam = TRUE;
+#endif // PLATFORM_PC
         unk_eb04();
         ParticleUpdate();
         ProjectileDrawAll_False();
@@ -159,6 +168,11 @@ u32 InGameHandler(void)
         RoomUpdate();
         SamusCallCheckPlayLowHealthSound();
     }
+
+#ifdef PLATFORM_PC
+    // Widescreen: extra tilemap columns and placement of this frame's OAM.
+    Port_WideInGameFrame(portHudEnd, portDrewOam);
+#endif // PLATFORM_PC
 
     return leaving;
 }

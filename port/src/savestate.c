@@ -215,6 +215,7 @@ PortStateResult Port_StateLoad(const uint8_t* buf, size_t size)
     }
 
     Port_SoundRebuildVoicegroups();
+    Port_ExtrasReset();
     return PORT_STATE_OK;
 }
 

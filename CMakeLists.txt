@@ -124,6 +124,10 @@ add_library(mf_port STATIC
     port/src/main.c
     port/src/savestate.c
     port/src/warp.c
+    port/src/widescreen.c
+    port/src/extras.c
+    port/src/second_screen.c
+    port/src/pacing.c
     port/ppu/src/virtuappu.c
     port/ppu/src/mode1.c)
 target_include_directories(mf_port PUBLIC port/include PRIVATE port/ppu/include)
@@ -153,6 +157,11 @@ if(MF_HOST STREQUAL "headless")
     add_executable(mf_headless port/src/host_headless.c)
     target_compile_options(mf_headless PRIVATE -std=gnu11 -Wall -Wextra)
     target_link_libraries(mf_headless PRIVATE mf_port mf_game mf_data mf_port)
+    # Frame pacing / sound rate control test (no ROM needed).
+    add_executable(mf_pacing_test tools/port/pacing_test.c port/src/pacing.c)
+    target_include_directories(mf_pacing_test PRIVATE port/include)
+    target_compile_options(mf_pacing_test PRIVATE -std=gnu11 -Wall -Wextra)
+    target_link_libraries(mf_pacing_test PRIVATE m)
 elseif(MF_HOST STREQUAL "sdl")
     if(NOT ANDROID)
         find_package(SDL3 CONFIG QUIET)

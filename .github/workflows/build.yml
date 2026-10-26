@@ -45,6 +45,8 @@ jobs:
           fi
           cat out.txt
           grep -q "ROM rejected" out.txt
+      - name: Frame pacing test
+        run: ./build/mf_pacing_test
 
   android:
     name: Android APK

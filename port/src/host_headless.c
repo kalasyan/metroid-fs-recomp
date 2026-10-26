@@ -4,12 +4,16 @@
 //
 //   mf_headless [--rom FILE] [--frames N] [--dump-every K] [--out DIR] [--save FILE]
 //                [--press FRAME:KEYS:LEN ...] [--wav FILE]
-//                [--state-save FRAME:FILE] [--state-load FRAME:FILE]
+//                [--state-save FRAME:FILE] [--state-load FRAME:FILE] [--width W]
+//                [--screen2 map|status]
 //
 // Frames are written as PPM images (no dependencies). KEYS is a combination
 // of the letters A B s(elect) S(tart) R(ight) L(eft) U(p) D(own) r l.
 // --wav records the sound output (16-bit stereo, 48 kHz).
 // --state-save / --state-load write or restore a save state after FRAME.
+// --screen2 also dumps the second screen (screen2_NNNNNN.ppm) with each frame.
+// MF_RUMBLE_LOG=1 logs the rumble events (port/src/extras.c).
+// --width renders a wider picture (widescreen option, e.g. 284 = 16:9).
 #include "port.h"
 
 #include <errno.h>
@@ -41,6 +45,7 @@ typedef struct StateOp {
 } StateOp;
 static StateOp sStateOps[8];
 static int sStateOpCount;
+static int sScreen2 = PORT_SCREEN2_OFF;
 
 static uint16_t ParseKeys(const char* s)
 {
@@ -83,6 +88,9 @@ bool Port_HostInit(const PortHostConfig* cfg)
         } else if (strcmp(a, "--save") == 0 && v) {
             sSavePath = v;
             i++;
+        } else if (strcmp(a, "--width") == 0 && v) {
+            Port_WideSetWidth(atoi(v));
+            i++;
         } else if (strcmp(a, "--wav") == 0 && v) {
             sWavPath = v;
             i++;
@@ -94,6 +102,9 @@ bool Port_HostInit(const PortHostConfig* cfg)
             p->keys = (*end == ':') ? ParseKeys(end + 1) : 0;
             const char* len = strrchr(v, ':');
             p->length = (len && len != end) ? strtoull(len + 1, NULL, 10) : 1;
+            i++;
+        } else if (strcmp(a, "--screen2") == 0 && v) {
+            sScreen2 = strcmp(v, "status") == 0 ? PORT_SCREEN2_STATUS : PORT_SCREEN2_MAP;
             i++;
         } else if ((strcmp(a, "--state-save") == 0 || strcmp(a, "--state-load") == 0) && v && sStateOpCount < 8) {
             StateOp* op = &sStateOps[sStateOpCount++];
@@ -161,12 +172,12 @@ void Port_HostShutdown(void)
     Port_Log("headless: stopped after %llu frames", (unsigned long long)Port_FrameCount());
 }
 
-static void WritePpm(const uint32_t* abgr, int width, int height, uint64_t frame)
+static void WritePpm(const uint32_t* abgr, int width, int height, uint64_t frame, const char* name)
 {
     char path[512];
     FILE* f;
 
-    snprintf(path, sizeof(path), "%s/frame_%06llu.ppm", sOutDir, (unsigned long long)frame);
+    snprintf(path, sizeof(path), "%s/%s_%06llu.ppm", sOutDir, name, (unsigned long long)frame);
     f = fopen(path, "wb");
     if (!f)
         return;
@@ -184,8 +195,14 @@ bool Port_HostPresent(const uint32_t* abgr, int width, int height)
 {
     const uint64_t frame = Port_FrameCount();
 
-    if (sDumpEvery != 0 && frame % sDumpEvery == 0)
-        WritePpm(abgr, width, height, frame);
+    if (sDumpEvery != 0 && frame % sDumpEvery == 0) {
+        WritePpm(abgr, width, height, frame, "frame");
+        if (sScreen2 != PORT_SCREEN2_OFF) {
+            static uint32_t screen2[256 * 240];
+            Port_SecondScreenRender(screen2, 256, 240, sScreen2);
+            WritePpm(screen2, 256, 240, frame, "screen2");
+        }
+    }
     return frame + 1 < sMaxFrames;
 }
 
@@ -212,6 +229,15 @@ void Port_HostQueueAudio(const int16_t* samples, int frames)
 
 void Port_HostWaitFrame(void)
 {
+}
+
+void Port_HostRumble(float low, float high, float pulse, int pulseMs)
+{
+    // Nothing to shake; MF_RUMBLE_LOG=1 shows the events.
+    (void)low;
+    (void)high;
+    (void)pulse;
+    (void)pulseMs;
 }
 
 void Port_HostFrameBoundary(void)

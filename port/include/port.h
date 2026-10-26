@@ -17,6 +17,8 @@
 
 #define GBA_SCREEN_WIDTH 240
 #define GBA_SCREEN_HEIGHT 160
+// Widest frame the port renders (widescreen option, 2:1).
+#define PORT_MAX_SCREEN_WIDTH 320
 
 // ---- I/O register helpers (gPortIo is the 0x04000000 region) -------------
 static inline uint16_t Port_IoRead16(uint32_t off)
@@ -79,7 +81,17 @@ void Port_ApuReset(void);
 void Port_ApuRunFrame(void);
 
 void Port_PpuInit(void);
-const uint32_t* Port_PpuRenderFrame(void); // ABGR8888, 240x160, pitch 240
+// ABGR8888, width x 160, pitch = width. 240 = the GBA screen.
+const uint32_t* Port_PpuRenderFrame(int width);
+
+// Widescreen (port/src/widescreen.c). The width is a setting: 240 (off) or a
+// wider even number up to PORT_MAX_SCREEN_WIDTH. The game tells the port
+// each in-game frame where the camera is (Port_WideSetFrame, platform.h);
+// other frames (menus, cutscenes) are drawn at 240 px, centered.
+void Port_WideSetWidth(int width);
+int Port_WideWidth(void);
+// Renders this frame's picture; *width is its width (Port_WideWidth()).
+const uint32_t* Port_WideRenderFrame(int* width);
 
 // One GBA frame: VBlank IRQ, scanline render with HBlank/VCount IRQs,
 // present, input, pacing. Called from the game's Halt/VBlankIntrWait.
@@ -116,9 +128,20 @@ void Port_HostWriteSave(const uint8_t* data, size_t size);
 // Writes the save through the host if the game changed it.
 void Port_FlushSave(void);
 
+// Rumble for this frame (port/src/extras.c). low/high: strength 0..1 of the
+// low / high frequency motors of a gamepad, sent every frame. pulse > 0: a
+// vibration of that strength and length starts now (for vibrators that only
+// take one-shot pulses, like a phone's).
+void Port_HostRumble(float low, float high, float pulse, int pulseMs);
+
 // Raises the "quit" request; the frame loop longjmps back to main.
 void Port_RequestQuit(void);
 bool Port_QuitRequested(void);
+
+// ---- extras: rumble and second screen (port_extras.h) ---------------------------
+#include "port_extras.h"
+// The game state of the last frame (map included), for the second screen.
+const struct PortGameStatus* Port_ExtrasStatus(void);
 
 // ---- save states (port/src/savestate.c) -------------------------------------
 // Port variables that are part of the machine state live in the same section

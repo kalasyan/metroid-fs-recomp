@@ -47,9 +47,12 @@ repository and the APKs contain no game data.
 
 - 📱 **Native Android app**, with a touch gamepad you can rearrange and resize.
 - 💾 **Quick saves:** slots with thumbnail and date (`F5` / `F8`), on top of the normal in-game save.
-- 🎨 **Video options:** LCD grid or CRT scanlines filter, VSync.
+- 🖥️ **Widescreen:** 16:10, 16:9, 2:1 or match your display. Menus, map and cutscenes stay at 3:2 in the center.
+- 🎨 **Video options:** fullscreen, integer scaling, smooth filter, LCD grid or CRT scanlines, VSync.
+- 🌊 **Smoothness options:** match the game speed to 60/120 Hz displays, or frame blending for 90/144 Hz.
+- 🗺️ **Second screen:** the sector map or Samus's status on the bottom screen of dual-screen devices (AYN Thor) or in a second window on PC.
 - ⏩ **Fast-forward** (x2 to x10, hold or toggle).
-- 🎮 **Keyboard and gamepad** with remappable buttons.
+- 🎮 **Keyboard and gamepad** with remappable buttons and rumble.
 - 🌍 **Europe and USA** builds. The European version keeps its five languages.
 - 🔊 **The original sound engine**, translated to C.
 - 🚫 **No BIOS and no emulator needed.**

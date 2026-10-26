@@ -37,6 +37,8 @@ typedef struct PortMenuHost {
     // Short message over the game (ASCII).
     void (*toast)(const char* text);
     void (*quit)(void);
+    // Optional: how the game is paced on this screen (ASCII), for the video page.
+    void (*syncStatus)(char* text, size_t size);
 } PortMenuHost;
 
 bool PortMenu_Init(const PortMenuHost* host);

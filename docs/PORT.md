@@ -113,3 +113,93 @@ GBA shortcuts that crash or draw something else on a 64-bit host:
 - **"End of previous array" pointer tables** (`sUnk_79bea8`, status screen):
   on the GBA the arrays are contiguous, natively they are not.
 - **Code copied to RAM**: Samus's HBlank in the credits is called directly.
+
+## Rumble and second screen
+
+`port/game/status.c` reads, once per frame (from `Port_RunFrame`, before
+presenting), the game's global variables: Samus's energy, ammo, equipment,
+pose and position, bombs and power bombs, screen shake and the minimap data
+the game keeps for the pause map. It only reads; the game code does not
+change. By comparing with the previous frame it detects events: damage
+(energy lost plus invincibility frames), continuous drain (lava, acid, cold),
+a bomb or power bomb exploding, a fall of more than 7 blocks, a shinespark
+crash, Samus's death and an item or ability pickup. Screen shake (bosses,
+explosions) rumbles while it lasts. The copy of the previous frame is
+forgotten when a save state is loaded, so no false events are seen.
+
+- **Rumble** (`port/src/extras.c`): each event triggers a short effect; the
+  strongest one drives both gamepad motors (`SDL_RumbleGamepad`). The device
+  vibrator (on Android, SDL's `VIBRATOR_SERVICE` haptic device) only supports
+  pulses, so it gets one each time the rumble starts or gets stronger.
+  `MF_RUMBLE_LOG=1` writes each event to the log (also with `mf_headless`, to
+  test it with `MF_WARP` and `--press`).
+- **Second screen** (`port/src/second_screen.c`): drawn in software on a
+  canvas 256 pixels wide. The map uses the pause map's tiles and palette with
+  the explored and downloaded rooms (`gMinimapData_Visited`), framed on the
+  sector's rooms, and Samus's tile blinks; the status page is text in an 8x8
+  font (energy, missiles, power bombs and equipment). On PC it is a second SDL
+  window (on another monitor if there is one; closing it turns it off). On
+  Android SDL only has one window, so `MfActivity` looks for a secondary
+  display (`DisplayManager`, *presentation* category first), shows a
+  `Presentation` there that never takes focus, and fetches the image through
+  JNI (`host_sdl.c`) on every refresh. Without a second display it does
+  nothing. `mf_headless --screen2 map|status` also dumps that image with each
+  capture.
+
+Options in `settings.ini` (`[rumble] gamepad, device, strength` and
+`[second_screen] mode = off | map | status`) and in the menu. Rumble is off by
+default; the second screen shows the map on Android (only when there is a
+second display) and is off on PC.
+
+## Smoothness: 60/120 Hz and frame blending
+
+The GBA draws 59.7275 frames per second and almost all displays run at 60 Hz
+(or 90, 120, 144...). By default the game follows the GBA clock, so on a 60 Hz
+display with VSync one frame is shown twice every ~3.7 s, and at 144 Hz frames
+last 2 or 3 refreshes irregularly. Two options in `settings.ini` (`[video]`)
+and in the menu (Video, Smoothness), both off by default and only in the SDL
+frontend (`port/src/host_sdl.c` and `port/src/pacing.c`):
+
+- `sync_to_display = true`: if the display refresh rate is a multiple of
+  ~59.73 Hz within 1% (59.94, 60, 120, 240 Hz...), the game runs one frame
+  every N refreshes, paced by VSync: at 60 Hz it runs 0.46% faster and every
+  frame lasts exactly one refresh. Sound plays that same 0.46% faster with a
+  small dynamic correction that keeps the audio queue at a fixed level, so it
+  neither drains nor overflows. On other displays the GBA clock is followed.
+- `frame_blend = true`: on displays that can't be synced (90, 144 Hz...), each
+  refresh blends the last two frames according to the moment it is shown. It
+  spreads motion evenly at the cost of a slight trail and half a frame of
+  latency.
+
+Both turn VSync on, and neither touches the game logic: only when frames are
+presented and the speed sound plays at change. `mf_pacing_test` (built with
+the headless host and run in CI) simulates 10 minutes of sound at several
+refresh rates and sound card clock errors. `MF_SYNC_LOG=1` prints the game
+fps, audio queue level and speed ratio every 5 s, and `MF_REFRESH_HZ=N` fakes
+another display refresh rate.
+
+## Widescreen
+
+The `widescreen` option (`off | auto | 16:10 | 16:9 | 2:1`, Video menu;
+`--width N` in headless) makes the picture 256, 284 or 320 px wide instead of
+240, with the same height. **The game does not change**: its camera, its
+240 px screen, the sprites' on-screen state and the logic are the GBA's. It
+just draws more:
+
+- **PPU** (`port/ppu`, `ws_origin` / `ws_obj`): the GBA screen is drawn at
+  column `origin` of the wide frame and the backgrounds continue on both
+  sides. Each OAM entry gets a placement: room object, HUD anchored left or
+  right, centered label, or "as on the GBA" (clipped to its 240 px).
+- **Tilemaps** (`port/game/widescreen.c`): every frame the tilemap columns
+  missing for the chosen width are rewritten from the room data, including
+  the blocks that come from the common tileset (`sCommonTilemap`).
+- **Sprites** (`src/sprite.c`): the ones in the extra columns are drawn too,
+  without touching their state, leaving 32 OAM entries free for Samus and her
+  shots.
+- **Framing** (`port/src/widescreen.c`): the GBA screen stays centered; near
+  the edge of what the camera may show the picture stops there and the GBA
+  screen slides off-center, and where the area is narrower than the picture
+  it is centered with black on the sides. Nothing the GBA camera could not
+  show is ever shown. The HUD sticks to the edges of what is shown.
+- Everything outside the in-game loop (title, menus, map, cutscenes) is drawn
+  at 240 px in the center. Save states don't change.
